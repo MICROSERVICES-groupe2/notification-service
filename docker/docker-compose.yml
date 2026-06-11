@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: bank-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: bank-kafka
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  notifications-service:
+    build:
+      context: ../
+      dockerfile: docker/Dockerfile
+    container_name: bank-notifications-service
+    ports:
+      - "8087:8087"
+    depends_on:
+      - kafka
+    environment:
+      - PORT=8087
+      - NODE_ENV=production
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_GROUP_ID=notifications-group
+      - SMTP_HOST=localhost
+      - SMTP_PORT=1025
+      - SMTP_USER=
+      - SMTP_PASS=
+      - SENDGRID_API_KEY=SG.placeholder
+      - TWILIO_ACCOUNT_SID=ACplaceholder
+      - TWILIO_AUTH_TOKEN=placeholder
+      - TWILIO_PHONE=+1234567890
+      - FIREBASE_PROJECT_ID=placeholder-project
+      - FIREBASE_PRIVATE_KEY=-----BEGIN PRIVATE KEY-----\nplaceholder\n-----END PRIVATE KEY-----\n
+      - FIREBASE_CLIENT_EMAIL=placeholder-email
