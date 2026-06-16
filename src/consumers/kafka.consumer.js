@@ -2,218 +2,200 @@ const { Kafka } = require('kafkajs');
 const config = require('../config');
 const notificationService = require('../services/notification.service');
 
-class KafkaConsumer {
-  constructor() {
-    this.kafka = new Kafka({
-      clientId: 'notifications-service',
-      brokers: config.kafka.bootstrapServers,
-      retry: {
-        initialRetryTime: 100,
-        retries: 8
-      }
-    });
+const kafka = new Kafka({
+  clientId: 'notifications-service',
+  brokers: config.kafka.bootstrapServers,
+  connectionTimeout: 5000,
+  initialRetryTime: 100,
+  retries: 3
+});
 
-    this.consumer = this.kafka.consumer({ groupId: config.kafka.groupId });
-    this.isConnected = false;
-  }
+const consumer = kafka.consumer({ groupId: config.kafka.groupId });
 
-  async start() {
-    let retries = 5;
-    while (retries > 0 && !this.isConnected) {
-      try {
-        console.log(JSON.stringify({
-          timestamp: new Date().toISOString(),
-          level: 'INFO',
-          logger: 'KafkaConsumer',
-          message: `Attempting to connect to Kafka brokers: ${config.kafka.bootstrapServers.join(', ')} (Retries left: ${retries})`
-        }));
-        await this.consumer.connect();
-        this.isConnected = true;
-        console.log(JSON.stringify({
-          timestamp: new Date().toISOString(),
-          level: 'INFO',
-          logger: 'KafkaConsumer',
-          message: 'Kafka consumer connected successfully.'
-        }));
-      } catch (error) {
-        retries--;
-        console.error(JSON.stringify({
-          timestamp: new Date().toISOString(),
-          level: 'ERROR',
-          logger: 'KafkaConsumer',
-          message: `Failed to connect to Kafka. Retrying in 5 seconds...`,
-          error: error.message
-        }));
-        if (retries === 0) {
-          console.error(JSON.stringify({
-            timestamp: new Date().toISOString(),
-            level: 'FATAL',
-            logger: 'KafkaConsumer',
-            message: 'Kafka connection failed after all retries. Continuing in mock/degraded mode.'
-          }));
-          return; // Do not crash the server, keep running so other protocols (socket.io, HTTP) work
-        }
-        await new Promise(resolve => setTimeout(resolve, 5000));
-      }
-    }
+/**
+ * Traite les événements de transaction pour les mapper aux templates Handlebars
+ */
+async function handleTransactionEvent(payload) {
+  // payload: { id, clientId, clientEmail, clientName, amount, currency, type, destination, status, date }
+  const isTransfer = payload.type && payload.type.toUpperCase() === 'TRANSFERT';
+  const template = isTransfer ? 'transfer_completed' : 'transaction_confirmed';
+  
+  const templateData = {
+    name: payload.clientName || 'Cher Client',
+    amount: payload.amount || '0.00',
+    currency: payload.currency || 'XAF',
+    type: payload.type || 'transaction',
+    destination: payload.destination || 'destinataire',
+    transactionId: payload.id || 'N/A',
+    date: payload.date || new Date().toLocaleString()
+  };
 
+  // Envoi par e-mail
+  if (payload.clientEmail) {
     try {
-      const topics = ['notifications.send', 'transactions.created', 'loans.requested'];
-      await this.consumer.subscribe({ topics, fromBeginning: false });
-      console.log(JSON.stringify({
-        timestamp: new Date().toISOString(),
-        level: 'INFO',
-        logger: 'KafkaConsumer',
-        message: `Subscribed to topics: ${topics.join(', ')}`
-      }));
-
-      await this.consumer.run({
-        eachMessage: async ({ topic, partition, message }) => {
-          const rawValue = message.value ? message.value.toString() : null;
-          console.log(JSON.stringify({
-            timestamp: new Date().toISOString(),
-            level: 'INFO',
-            logger: 'KafkaConsumer',
-            message: `Received message from topic ${topic}`,
-            partition,
-            offset: message.offset
-          }));
-
-          if (!rawValue) return;
-
-          try {
-            const payload = JSON.parse(rawValue);
-            await this.handleMessage(topic, payload);
-          } catch (err) {
-            console.error(JSON.stringify({
-              timestamp: new Date().toISOString(),
-              level: 'ERROR',
-              logger: 'KafkaConsumer',
-              message: `Error processing message from topic ${topic}`,
-              error: err.message,
-              rawValue
-            }));
-            // Do not throw to avoid crashing the consumer group
-          }
-        }
+      await notificationService.dispatch({
+        channel: 'EMAIL',
+        template: template,
+        data: templateData,
+        to: payload.clientEmail,
+        subject: isTransfer ? 'Transfert Effectué' : 'Transaction Confirmée'
       });
-    } catch (err) {
-      console.error(JSON.stringify({
-        timestamp: new Date().toISOString(),
-        level: 'ERROR',
-        logger: 'KafkaConsumer',
-        message: 'Error in consumer subscribe/run',
-        error: err.message
-      }));
+    } catch (e) {
+      console.error('Failed to send transaction email notification:', e.message);
     }
   }
 
-  async handleMessage(topic, payload) {
-    if (topic === 'notifications.send') {
-      // Direct notification dispatch
-      // Payload format: { channel, to, templateName, subject, data }
-      await notificationService.dispatch(payload);
-    } else if (topic === 'transactions.created') {
-      // Map transaction event to user notifications
-      // Payload might be: { userId, email, phone, fcmToken, name, type, amount, currency, transactionId, date, destination }
-      const isTransfer = payload.type === 'TRANSFER' || payload.type === 'TRANSFERT' || payload.destination;
-      const templateName = isTransfer ? 'transfer_completed' : 'transaction_confirmed';
-      
-      // Dispatch via multiple channels if available
-      if (payload.email) {
-        await notificationService.dispatch({
-          channel: 'EMAIL',
-          to: payload.email,
-          templateName,
-          data: payload
-        });
-      }
-      if (payload.userId) {
-        await notificationService.dispatch({
-          channel: 'INAPP',
-          to: payload.userId,
-          templateName,
-          data: payload
-        });
-      }
-      if (payload.fcmToken) {
-        await notificationService.dispatch({
-          channel: 'PUSH',
-          to: payload.fcmToken,
-          templateName,
-          data: payload
-        });
-      }
-      if (payload.phone) {
-        await notificationService.dispatch({
-          channel: 'SMS',
-          to: payload.phone,
-          templateName,
-          data: payload
-        });
-      }
-    } else if (topic === 'loans.requested') {
-      // Map loan event to user notifications
-      // Payload might be: { userId, email, phone, fcmToken, name, amount, currency, status, firstPaymentDate, reason }
-      const isApproved = payload.status === 'APPROVED' || payload.status === 'approved';
-      const templateName = isApproved ? 'loan_approved' : 'loan_rejected';
-
-      if (payload.email) {
-        await notificationService.dispatch({
-          channel: 'EMAIL',
-          to: payload.email,
-          templateName,
-          data: payload
-        });
-      }
-      if (payload.userId) {
-        await notificationService.dispatch({
-          channel: 'INAPP',
-          to: payload.userId,
-          templateName,
-          data: payload
-        });
-      }
-      if (payload.fcmToken) {
-        await notificationService.dispatch({
-          channel: 'PUSH',
-          to: payload.fcmToken,
-          templateName,
-          data: payload
-        });
-      }
-      if (payload.phone) {
-        await notificationService.dispatch({
-          channel: 'SMS',
-          to: payload.phone,
-          templateName,
-          data: payload
-        });
-      }
-    }
-  }
-
-  async shutdown() {
-    if (this.isConnected) {
-      try {
-        await this.consumer.disconnect();
-        console.log(JSON.stringify({
-          timestamp: new Date().toISOString(),
-          level: 'INFO',
-          logger: 'KafkaConsumer',
-          message: 'Kafka consumer disconnected successfully.'
-        }));
-      } catch (error) {
-        console.error(JSON.stringify({
-          timestamp: new Date().toISOString(),
-          level: 'ERROR',
-          logger: 'KafkaConsumer',
-          message: 'Error during Kafka consumer disconnect',
-          error: error.message
-        }));
-      }
+  // Envoi In-App (temps réel)
+  if (payload.clientId) {
+    try {
+      await notificationService.dispatch({
+        channel: 'INAPP',
+        template: template,
+        data: templateData,
+        userId: payload.clientId,
+        title: isTransfer ? 'Virement émis' : 'Mouvement de compte'
+      });
+    } catch (e) {
+      console.error('Failed to send transaction in-app notification:', e.message);
     }
   }
 }
 
-module.exports = new KafkaConsumer();
+/**
+ * Traite les événements de prêts (loans)
+ */
+async function handleLoanEvent(payload) {
+  // payload: { id, clientId, clientEmail, clientName, amount, currency, status, reason, firstPaymentDate }
+  const isApproved = payload.status && payload.status.toUpperCase() === 'APPROVED';
+  const template = isApproved ? 'loan_approved' : 'loan_rejected';
+
+  const templateData = {
+    name: payload.clientName || 'Cher Client',
+    amount: payload.amount || '0.00',
+    currency: payload.currency || 'XAF',
+    reason: payload.reason || 'Critères d\'attribution non respectés',
+    firstPaymentDate: payload.firstPaymentDate || 'N/A'
+  };
+
+  // Envoi par email
+  if (payload.clientEmail) {
+    try {
+      await notificationService.dispatch({
+        channel: 'EMAIL',
+        template: template,
+        data: templateData,
+        to: payload.clientEmail,
+        subject: isApproved ? 'Prêt Accordé' : 'Décision Demande de Prêt'
+      });
+    } catch (e) {
+      console.error('Failed to send loan email notification:', e.message);
+    }
+  }
+
+  // Envoi In-App
+  if (payload.clientId) {
+    try {
+      await notificationService.dispatch({
+        channel: 'INAPP',
+        template: template,
+        data: templateData,
+        userId: payload.clientId,
+        title: isApproved ? 'Félicitations - Prêt approuvé' : 'Demande de prêt refusée'
+      });
+    } catch (e) {
+      console.error('Failed to send loan in-app notification:', e.message);
+    }
+  }
+}
+
+/**
+ * Routeur principal des événements Kafka
+ */
+async function processKafkaEvent(topic, payload) {
+  switch (topic) {
+    case 'notifications.send':
+      // Direct notification request
+      await notificationService.dispatch(payload);
+      break;
+      
+    case 'transactions.created':
+      await handleTransactionEvent(payload);
+      break;
+      
+    case 'loans.requested':
+      await handleLoanEvent(payload);
+      break;
+      
+    default:
+      console.warn(`No handler for topic: ${topic}`);
+  }
+}
+
+/**
+ * Démarre le consommateur Kafka avec retry backoff
+ */
+async function startKafkaConsumer() {
+  console.log(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    level: 'INFO',
+    logger: 'KafkaConsumer',
+    message: 'Attempting to connect to Kafka brokers...'
+  }));
+
+  try {
+    await consumer.connect();
+    console.log(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      level: 'INFO',
+      logger: 'KafkaConsumer',
+      message: 'Connected to Kafka successfully'
+    }));
+
+    // S'inscrire aux différents topics
+    await consumer.subscribe({ topic: 'notifications.send', fromBeginning: false });
+    await consumer.subscribe({ topic: 'transactions.created', fromBeginning: false });
+    await consumer.subscribe({ topic: 'loans.requested', fromBeginning: false });
+
+    await consumer.run({
+      eachMessage: async ({ topic, partition, message }) => {
+        const msgValue = message.value.toString();
+        console.log(JSON.stringify({
+          timestamp: new Date().toISOString(),
+          level: 'INFO',
+          logger: 'KafkaConsumer',
+          message: `Received message from topic "${topic}"`,
+          payload: msgValue
+        }));
+
+        try {
+          const payload = JSON.parse(msgValue);
+          await processKafkaEvent(topic, payload);
+        } catch (err) {
+          console.error(JSON.stringify({
+            timestamp: new Date().toISOString(),
+            level: 'ERROR',
+            logger: 'KafkaConsumer',
+            message: `Error parsing event on topic ${topic}: ${err.message}`
+          }));
+        }
+      }
+    });
+
+  } catch (error) {
+    console.warn(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      level: 'WARN',
+      logger: 'KafkaConsumer',
+      message: `Could not connect to Kafka (${error.message}). Retrying in 10s...`
+    }));
+    
+    // Retry connection without crashing the express server
+    setTimeout(startKafkaConsumer, 10000);
+  }
+}
+
+module.exports = {
+  startKafkaConsumer,
+  consumer,
+  processKafkaEvent
+};

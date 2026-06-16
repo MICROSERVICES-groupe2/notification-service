@@ -1,66 +1,82 @@
 const NotificationAdapter = require('./adapter.interface');
-const { messaging, isMock } = require('../config/firebase');
+const admin = require('firebase-admin');
+const config = require('../config');
 
 class PushAdapter extends NotificationAdapter {
   constructor() {
     super();
+    this.initialized = false;
+
+    const hasCredentials = config.firebase.projectId && config.firebase.privateKey && config.firebase.clientEmail;
+
+    if (hasCredentials) {
+      try {
+        admin.initializeApp({
+          credential: admin.credential.cert({
+            projectId: config.firebase.projectId,
+            privateKey: config.firebase.privateKey,
+            clientEmail: config.firebase.clientEmail,
+          })
+        });
+        this.initialized = true;
+        console.log('PushAdapter initialized using Firebase Admin SDK');
+      } catch (error) {
+        console.error('Firebase Admin SDK initialization failure:', error.message);
+        console.log('Falling back to Console Simulation mode for Push notifications');
+      }
+    } else {
+      console.log('Firebase credentials missing. PushAdapter initialized in Console Simulation mode');
+    }
+  }
+
+  async send(notification) {
+    const { token, title, body, data } = notification;
+
+    // Check if we have token
+    if (!token) {
+      throw new Error('FCM token is required to send push notification');
+    }
+
     console.log(JSON.stringify({
       timestamp: new Date().toISOString(),
       level: 'INFO',
       logger: 'PushAdapter',
-      message: `PushAdapter initialized (Mock mode: ${isMock}).`
+      message: `Sending Push Notification to token ${token.substring(0, 10)}...: "${title} - ${body}"`
     }));
-  }
 
-  async send(notification) {
-    const { to, subject, body, data } = notification; // 'to' represents the FCM Registration Token here
-
-    try {
-      const payload = {
-        token: to,
-        notification: {
-          title: subject || 'New Notification',
-          body: body,
-        },
-        data: data || {},
-      };
-
-      const messageId = await messaging.send(payload);
+    if (this.initialized) {
+      try {
+        const payload = {
+          token: token,
+          notification: {
+            title: title,
+            body: body
+          },
+          data: data || {}
+        };
+        const response = await admin.messaging().send(payload);
+        return { success: true, provider: 'Firebase', messageId: response };
+      } catch (error) {
+        console.error('Firebase FCM send failure:', error.message);
+        
+        // Gérer les tokens FCM invalides
+        if (error.code === 'messaging/invalid-argument' || error.code === 'messaging/registration-token-not-registered') {
+          console.warn(`FCM Token is invalid/unregistered. Token should be removed from database.`);
+          return { success: false, code: 'TOKEN_INVALID', message: error.message };
+        }
+        throw error;
+      }
+    } else {
+      // Simulate Push notification dispatch
       console.log(JSON.stringify({
         timestamp: new Date().toISOString(),
         level: 'INFO',
-        logger: 'PushAdapter',
-        message: `Push notification sent successfully to token ${to.substring(0, 15)}...`,
-        messageId
+        logger: 'PushAdapter-Simulator',
+        message: `[SIMULATION] Push notification sent to token successfully.`
       }));
-      return { messageId };
-    } catch (error) {
-      // Catch specific Firebase Admin Messaging error codes for invalid registration tokens
-      const isInvalidToken = error.code === 'messaging/registration-token-not-registered' || 
-                             error.code === 'messaging/invalid-registration-token' ||
-                             error.message?.includes('not registered') ||
-                             error.message?.includes('invalid token');
-
-      if (isInvalidToken) {
-        console.warn(JSON.stringify({
-          timestamp: new Date().toISOString(),
-          level: 'WARN',
-          logger: 'PushAdapter',
-          message: `FCM token is invalid or no longer registered: ${to}. Simulating deleting from DB.`,
-          error: error.message
-        }));
-      } else {
-        console.error(JSON.stringify({
-          timestamp: new Date().toISOString(),
-          level: 'ERROR',
-          logger: 'PushAdapter',
-          message: `Push notification failed to send`,
-          error: error.message
-        }));
-      }
-      throw error;
+      return { success: true, provider: 'Console' };
     }
   }
 }
 
-module.exports = PushAdapter;
+module.exports = new PushAdapter();

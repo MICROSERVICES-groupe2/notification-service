@@ -1,7 +1,11 @@
 class NotificationAdapter {
+  /**
+   * Envoie une notification
+   * @param {Object} notification - Objet contenant { to, subject, body, data }
+   * @returns {Promise<any>}
+   */
   async send(notification) {
-    // notification: { to, subject, body, data }
-    throw new Error('Not implemented');
+    throw new Error('Method "send" must be implemented');
   }
 }
 

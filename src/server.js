@@ -1,125 +1,71 @@
 const http = require('http');
 const app = require('./app');
 const config = require('./config');
-const socketIo = require('socket.io');
-const inappAdapter = require('./adapters/inapp.adapter');
-const kafkaConsumer = require('./consumers/kafka.consumer');
 
 const server = http.createServer(app);
-
-// Initialize Socket.io
-const io = socketIo(server, {
+const io = require('socket.io')(server, {
   cors: {
     origin: '*',
     methods: ['GET', 'POST']
   }
 });
 
-// Link io instance to InAppAdapter
-inappAdapter.setIo(io);
+// Partage de l'instance io avec l'adaptateur in-app
+const inappAdapter = require('./adapters/inapp.adapter');
+inappAdapter.setSocketIO(io);
 
-// Handle Socket.io connections
+// Gestion des connexions Socket.io
 io.on('connection', (socket) => {
-  const userId = socket.handshake.query.userId || socket.handshake.auth?.userId;
-
+  const userId = socket.handshake.query.userId;
   if (userId) {
     const roomName = `user:${userId}`;
     socket.join(roomName);
-
     console.log(JSON.stringify({
       timestamp: new Date().toISOString(),
       level: 'INFO',
-      logger: 'SocketServer',
-      message: `User ${userId} connected. Joined room ${roomName}. Socket ID: ${socket.id}`
+      logger: 'Socket.io',
+      message: `User ${userId} joined room ${roomName}`
     }));
 
-    // Retrieve and deliver unread notifications buffered while user was offline
-    const unreadNotifications = inappAdapter.flushUnread(userId);
-    if (unreadNotifications.length > 0) {
-      console.log(JSON.stringify({
-        timestamp: new Date().toISOString(),
-        level: 'INFO',
-        logger: 'SocketServer',
-        message: `Delivering ${unreadNotifications.length} offline notifications to user ${userId}`
-      }));
-      unreadNotifications.forEach((notification) => {
-        socket.emit('notification', notification);
-      });
+    // Récupérer et envoyer les notifications non lues hors-ligne
+    const offlineNotifications = inappAdapter.getOfflineNotifications(userId);
+    if (offlineNotifications.length > 0) {
+      socket.emit('offline-notifications', offlineNotifications);
+      inappAdapter.clearOfflineNotifications(userId);
     }
-  } else {
-    console.log(JSON.stringify({
-      timestamp: new Date().toISOString(),
-      level: 'WARN',
-      logger: 'SocketServer',
-      message: `Client connected without userId. Socket ID: ${socket.id}`
-    }));
   }
 
-  socket.on('disconnect', (reason) => {
+  socket.on('disconnect', () => {
     console.log(JSON.stringify({
       timestamp: new Date().toISOString(),
       level: 'INFO',
-      logger: 'SocketServer',
-      message: `Socket disconnected. ID: ${socket.id}, Reason: ${reason}`
+      logger: 'Socket.io',
+      message: `Client disconnected: ${socket.id}`
     }));
   });
 });
 
-// Start the server
-server.listen(config.port, () => {
+const PORT = config.port;
+server.listen(PORT, async () => {
   console.log(JSON.stringify({
     timestamp: new Date().toISOString(),
     level: 'INFO',
-    logger: 'ExpressServer',
-    message: `Server is running on port ${config.port} in ${config.env} mode.`
+    logger: 'Server',
+    message: `Server bank-platform-notifications running on port ${PORT}`
   }));
 
-  // Start the Kafka consumer in the background
-  kafkaConsumer.start();
+  // Initialisation du consumer Kafka
+  const { startKafkaConsumer } = require('./consumers/kafka.consumer');
+  try {
+    await startKafkaConsumer();
+  } catch (error) {
+    console.error(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      level: 'ERROR',
+      logger: 'KafkaInit',
+      message: `Failed to start Kafka consumer: ${error.message}`
+    }));
+  }
 });
-
-// Graceful shutdown
-const handleGracefulShutdown = async (signal) => {
-  console.log(JSON.stringify({
-    timestamp: new Date().toISOString(),
-    level: 'INFO',
-    logger: 'Lifecycle',
-    message: `Received ${signal}. Starting graceful shutdown...`
-  }));
-
-  // Close HTTP server first (stops accepting new requests)
-  server.close(() => {
-    console.log(JSON.stringify({
-      timestamp: new Date().toISOString(),
-      level: 'INFO',
-      logger: 'Lifecycle',
-      message: 'HTTP server closed.'
-    }));
-  });
-
-  // Shut down Kafka consumer
-  await kafkaConsumer.shutdown();
-
-  // Close Socket.io connections
-  io.close(() => {
-    console.log(JSON.stringify({
-      timestamp: new Date().toISOString(),
-      level: 'INFO',
-      logger: 'Lifecycle',
-      message: 'Socket.io server closed.'
-    }));
-  });
-
-  console.log(JSON.stringify({
-    timestamp: new Date().toISOString(),
-    level: 'INFO',
-    logger: 'Lifecycle',
-    message: 'Graceful shutdown complete. Exiting process.'
-  }));
-  process.exit(0);
-};
-
-process.on('SIGTERM', () => handleGracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => handleGracefulShutdown('SIGINT'));
 
 module.exports = server;

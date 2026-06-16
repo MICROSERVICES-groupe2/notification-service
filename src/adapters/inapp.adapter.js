@@ -4,101 +4,92 @@ class InAppAdapter extends NotificationAdapter {
   constructor() {
     super();
     this.io = null;
-    // in-memory store for offline notifications: userId -> array of notifications
-    this.unreadStore = new Map();
-    console.log(JSON.stringify({
-      timestamp: new Date().toISOString(),
-      level: 'INFO',
-      logger: 'InAppAdapter',
-      message: 'InAppAdapter initialized.'
-    }));
+    // Stockage en mémoire des notifications hors-ligne
+    this.offlineStore = {};
   }
 
-  setIo(io) {
+  /**
+   * Définit l'instance Socket.io
+   * @param {Object} io - Instance de Socket.io
+   */
+  setSocketIO(io) {
     this.io = io;
-    console.log(JSON.stringify({
-      timestamp: new Date().toISOString(),
-      level: 'INFO',
-      logger: 'InAppAdapter',
-      message: 'Socket.io instance set for InAppAdapter.'
-    }));
+    console.log('InAppAdapter linked to Socket.io server');
   }
 
+  /**
+   * Envoie une notification In-App
+   * @param {Object} notification - Doit contenir { userId, body, title, data }
+   */
   async send(notification) {
-    const { to: userId, subject, body, data } = notification; // 'to' represents the userId here
+    const { userId, title, body, data } = notification;
 
     if (!userId) {
-      const errorMsg = 'InApp notification requires a userId (passed in "to" field)';
-      console.error(JSON.stringify({
-        timestamp: new Date().toISOString(),
-        level: 'ERROR',
-        logger: 'InAppAdapter',
-        message: errorMsg
-      }));
-      throw new Error(errorMsg);
+      throw new Error('userId is required for InApp notifications');
     }
 
     const payload = {
-      id: `inapp-msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      title: subject || 'Notification',
-      body,
+      id: notification.id || Math.random().toString(36).substr(2, 9),
+      title: title || 'Nouvelle Notification',
+      body: body,
       data: data || {},
       timestamp: new Date().toISOString()
     };
 
-    // Check if the user is online (socket room has clients)
-    const roomName = `user:${userId}`;
-    let isOnline = false;
+    console.log(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      level: 'INFO',
+      logger: 'InAppAdapter',
+      message: `Dispatching in-app notification to user ${userId}`
+    }));
 
-    if (this.io) {
-      const activeSockets = this.io.sockets.adapter.rooms.get(roomName);
-      isOnline = activeSockets && activeSockets.size > 0;
+    if (!this.io) {
+      console.warn('Socket.io server instance is not configured in InAppAdapter. Message queued offline.');
+      this.saveOfflineNotification(userId, payload);
+      return { success: true, status: 'QUEUED_NO_SERVER' };
     }
 
+    const roomName = `user:${userId}`;
+    const activeClients = this.io.sockets.adapter.rooms.get(roomName);
+    const isOnline = activeClients && activeClients.size > 0;
+
     if (isOnline) {
-      // Emit to the user's room
+      // Diffuser la notification en temps réel
       this.io.to(roomName).emit('notification', payload);
       console.log(JSON.stringify({
         timestamp: new Date().toISOString(),
         level: 'INFO',
         logger: 'InAppAdapter',
-        message: `In-App notification sent to room ${roomName}`,
-        payload
+        message: `In-app notification sent in real-time to online user ${userId}`
       }));
+      return { success: true, status: 'DELIVERED' };
     } else {
-      // User is offline, buffer the notification
-      if (!this.unreadStore.has(userId)) {
-        this.unreadStore.set(userId, []);
-      }
-      this.unreadStore.get(userId).push(payload);
+      // Stocker hors-ligne pour distribution ultérieure
       console.log(JSON.stringify({
         timestamp: new Date().toISOString(),
         level: 'INFO',
         logger: 'InAppAdapter',
-        message: `User ${userId} is offline. Buffered notification. Total buffered: ${this.unreadStore.get(userId).length}`,
-        payload
+        message: `User ${userId} is offline. Notification queued.`
       }));
+      this.saveOfflineNotification(userId, payload);
+      return { success: true, status: 'QUEUED' };
     }
-
-    return payload;
   }
 
-  // Retrieve and clear unread notifications
-  flushUnread(userId) {
-    if (this.unreadStore.has(userId)) {
-      const unread = this.unreadStore.get(userId);
-      this.unreadStore.delete(userId);
-      console.log(JSON.stringify({
-        timestamp: new Date().toISOString(),
-        level: 'INFO',
-        logger: 'InAppAdapter',
-        message: `Flushed ${unread.length} unread notifications for user ${userId}`
-      }));
-      return unread;
+  saveOfflineNotification(userId, payload) {
+    if (!this.offlineStore[userId]) {
+      this.offlineStore[userId] = [];
     }
-    return [];
+    this.offlineStore[userId].push(payload);
+  }
+
+  getOfflineNotifications(userId) {
+    return this.offlineStore[userId] || [];
+  }
+
+  clearOfflineNotifications(userId) {
+    this.offlineStore[userId] = [];
   }
 }
 
-// Export a singleton for easy import across files
 module.exports = new InAppAdapter();

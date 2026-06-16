@@ -2,117 +2,88 @@ const fs = require('fs');
 const path = require('path');
 const handlebars = require('handlebars');
 
-const emailAdapter = new (require('../adapters/email.adapter'))();
-const smsAdapter = new (require('../adapters/sms.adapter'))();
+const emailAdapter = require('../adapters/email.adapter');
+const smsAdapter = require('../adapters/sms.adapter');
 const pushAdapter = require('../adapters/push.adapter');
 const inappAdapter = require('../adapters/inapp.adapter');
 
 class NotificationService {
-  constructor() {
-    this.templatesDir = path.join(__dirname, '../templates');
-    this.compiledTemplates = new Map();
-    console.log(JSON.stringify({
-      timestamp: new Date().toISOString(),
-      level: 'INFO',
-      logger: 'NotificationService',
-      message: 'NotificationService initialized.'
-    }));
-  }
-
-  // Compile and cache handlebars template
-  getTemplate(templateName) {
-    if (this.compiledTemplates.has(templateName)) {
-      return this.compiledTemplates.get(templateName);
-    }
-
-    const templatePath = path.join(this.templatesDir, `${templateName}.hbs`);
-    if (!fs.existsSync(templatePath)) {
-      throw new Error(`Template not found: ${templateName}`);
-    }
-
-    const source = fs.readFileSync(templatePath, 'utf-8');
-    const compiled = handlebars.compile(source);
-    this.compiledTemplates.set(templateName, compiled);
-    return compiled;
-  }
-
+  /**
+   * Charge et rend un template Handlebars avec des données dynamiques
+   * @param {string} templateName - Nom du fichier de template (sans extension .hbs)
+   * @param {Object} data - Données dynamiques à injecter dans le template
+   * @returns {string} - Le texte ou HTML final rendu
+   */
   render(templateName, data) {
     try {
-      const template = this.getTemplate(templateName);
-      return template(data);
+      const templatePath = path.join(__dirname, '..', 'templates', `${templateName}.hbs`);
+      
+      if (!fs.existsSync(templatePath)) {
+        throw new Error(`Template "${templateName}" not found at ${templatePath}`);
+      }
+
+      const templateSource = fs.readFileSync(templatePath, 'utf8');
+      const compiledTemplate = handlebars.compile(templateSource);
+      return compiledTemplate(data);
     } catch (error) {
-      console.error(JSON.stringify({
-        timestamp: new Date().toISOString(),
-        level: 'ERROR',
-        logger: 'NotificationService',
-        message: `Failed to render template ${templateName}`,
-        error: error.message
-      }));
+      console.error(`Error rendering template ${templateName}:`, error.message);
       throw error;
     }
   }
 
-  // Main entry point for dispatching notifications
+  /**
+   * Distribue l'événement de notification vers le bon adaptateur après avoir rendu le template
+   * @param {Object} event - L'événement reçu, e.g. { channel, template, data, to, subject, userId, token, title }
+   */
   async dispatch(event) {
-    // Event format:
-    // {
-    //   channel: 'EMAIL' | 'SMS' | 'PUSH' | 'INAPP',
-    //   to: string (email, phone, fcmToken, or userId),
-    //   templateName: string,
-    //   subject?: string,
-    //   data: object
-    // }
-    const { channel, to, templateName, subject, data } = event;
+    const { channel, template, data, to, subject, userId, token, title } = event;
 
-    if (!channel || !to || !templateName) {
-      throw new Error('Notification event requires channel, to, and templateName fields.');
+    if (!channel) {
+      throw new Error('Notification channel is required');
     }
+
+    // Rendre le contenu à partir du template (si fourni)
+    let body = event.body || '';
+    if (template) {
+      body = this.render(template, data || {});
+    }
+
+    const notificationPayload = {
+      to,
+      subject,
+      body,
+      userId,
+      token,
+      title,
+      data
+    };
 
     console.log(JSON.stringify({
       timestamp: new Date().toISOString(),
       level: 'INFO',
       logger: 'NotificationService',
-      message: `Dispatching notification to ${to} via ${channel} using template ${templateName}`
+      message: `Dispatching notification on channel ${channel}`
     }));
-
-    const body = this.render(templateName, data);
-
-    const notificationPayload = {
-      to,
-      subject: subject || this.getDefaultSubject(templateName),
-      body,
-      html: body, // For emails, passes the body as HTML
-      data
-    };
 
     switch (channel.toUpperCase()) {
       case 'EMAIL':
-        return await emailAdapter.send(notificationPayload);
+        if (!to) throw new Error('Recipient email (to) is required for EMAIL channel');
+        return await emailAdapter.send({ to, subject: subject || 'Bank Alert', body });
+
       case 'SMS':
-        return await smsAdapter.send(notificationPayload);
+        if (!to) throw new Error('Phone number (to) is required for SMS channel');
+        return await smsAdapter.send({ to, body });
+
       case 'PUSH':
-        return await pushAdapter.send(notificationPayload);
+        if (!token) throw new Error('FCM token is required for PUSH channel');
+        return await pushAdapter.send({ token, title: title || 'Alert', body, data });
+
       case 'INAPP':
-        return await inappAdapter.send(notificationPayload);
+        if (!userId) throw new Error('userId is required for INAPP channel');
+        return await inappAdapter.send({ userId, title: title || 'Alert', body, data });
+
       default:
         throw new Error(`Unsupported notification channel: ${channel}`);
-    }
-  }
-
-  getDefaultSubject(templateName) {
-    switch (templateName) {
-      case 'welcome':
-        return 'Bienvenue sur notre plateforme !';
-      case 'transaction_confirmed':
-        return 'Confirmation de transaction';
-      case 'transfer_completed':
-        return 'Transfert effectué';
-      case 'loan_approved':
-        return 'Votre demande de prêt est approuvée !';
-      case 'loan_rejected':
-        return 'Mise à jour concernant votre demande de prêt';
-      default:
-        return 'Nouvelle Notification';
     }
   }
 }
