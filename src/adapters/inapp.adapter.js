@@ -4,8 +4,9 @@ class InAppAdapter extends NotificationAdapter {
   constructor() {
     super();
     this.io = null;
-    // Stockage en mémoire des notifications hors-ligne
-    this.offlineStore = {};
+    // Stockage en mémoire des notifications hors-ligne (API legacy: offlineStore)
+    this.unreadStore = new Map();
+    this.offlineStore = {}; // alias legacy pour les consommateurs existants
   }
 
   /**
@@ -17,12 +18,20 @@ class InAppAdapter extends NotificationAdapter {
     console.log('InAppAdapter linked to Socket.io server');
   }
 
+  // Alias utilisé par les tests
+  setIo(io) {
+    this.setSocketIO(io);
+  }
+
   /**
    * Envoie une notification In-App
    * @param {Object} notification - Doit contenir { userId, body, title, data }
+   *                 ou legacy { to, body, subject, data }
    */
   async send(notification) {
-    const { userId, title, body, data } = notification;
+    const userId = notification.userId || notification.to;
+    const title = notification.title || notification.subject || 'Nouvelle Notification';
+    const { body, data } = notification;
 
     if (!userId) {
       throw new Error('userId is required for InApp notifications');
@@ -30,7 +39,7 @@ class InAppAdapter extends NotificationAdapter {
 
     const payload = {
       id: notification.id || Math.random().toString(36).substr(2, 9),
-      title: title || 'Nouvelle Notification',
+      title: title,
       body: body,
       data: data || {},
       timestamp: new Date().toISOString()
@@ -46,7 +55,7 @@ class InAppAdapter extends NotificationAdapter {
     if (!this.io) {
       console.warn('Socket.io server instance is not configured in InAppAdapter. Message queued offline.');
       this.saveOfflineNotification(userId, payload);
-      return { success: true, status: 'QUEUED_NO_SERVER' };
+      return { success: true, status: 'QUEUED_NO_SERVER', ...payload };
     }
 
     const roomName = `user:${userId}`;
@@ -62,7 +71,7 @@ class InAppAdapter extends NotificationAdapter {
         logger: 'InAppAdapter',
         message: `In-app notification sent in real-time to online user ${userId}`
       }));
-      return { success: true, status: 'DELIVERED' };
+      return { success: true, status: 'DELIVERED', ...payload };
     } else {
       // Stocker hors-ligne pour distribution ultérieure
       console.log(JSON.stringify({
@@ -72,24 +81,36 @@ class InAppAdapter extends NotificationAdapter {
         message: `User ${userId} is offline. Notification queued.`
       }));
       this.saveOfflineNotification(userId, payload);
-      return { success: true, status: 'QUEUED' };
+      return { success: true, status: 'QUEUED', ...payload };
     }
   }
 
   saveOfflineNotification(userId, payload) {
-    if (!this.offlineStore[userId]) {
-      this.offlineStore[userId] = [];
+    if (!this.unreadStore.has(userId)) {
+      this.unreadStore.set(userId, []);
     }
-    this.offlineStore[userId].push(payload);
+    this.unreadStore.get(userId).push(payload);
+    // Maintenir l'alias legacy à jour
+    this.offlineStore[userId] = this.unreadStore.get(userId);
   }
 
   getOfflineNotifications(userId) {
-    return this.offlineStore[userId] || [];
+    return this.unreadStore.get(userId) || [];
   }
 
   clearOfflineNotifications(userId) {
+    this.unreadStore.set(userId, []);
     this.offlineStore[userId] = [];
+  }
+
+  flushUnread(userId) {
+    const notifications = this.getOfflineNotifications(userId);
+    this.unreadStore.delete(userId);
+    this.offlineStore[userId] = [];
+    return notifications;
   }
 }
 
-module.exports = new InAppAdapter();
+const inappAdapter = new InAppAdapter();
+inappAdapter.InAppAdapter = InAppAdapter;
+module.exports = inappAdapter;
