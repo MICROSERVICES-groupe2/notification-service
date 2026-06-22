@@ -12,6 +12,8 @@ const kafka = new Kafka({
 
 const consumer = kafka.consumer({ groupId: config.kafka.groupId });
 
+let isConnected = false;
+
 /**
  * Traite les événements de transaction pour les mapper aux templates Handlebars
  */
@@ -144,6 +146,7 @@ async function startKafkaConsumer() {
 
   try {
     await consumer.connect();
+    isConnected = true;
     console.log(JSON.stringify({
       timestamp: new Date().toISOString(),
       level: 'INFO',
@@ -182,6 +185,7 @@ async function startKafkaConsumer() {
     });
 
   } catch (error) {
+    isConnected = false;
     console.warn(JSON.stringify({
       timestamp: new Date().toISOString(),
       level: 'WARN',
@@ -195,7 +199,9 @@ async function startKafkaConsumer() {
 }
 
 module.exports = {
+  start: startKafkaConsumer,
   startKafkaConsumer,
   consumer,
-  processKafkaEvent
+  processKafkaEvent,
+  get isConnected() { return isConnected; }
 };

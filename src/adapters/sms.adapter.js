@@ -6,7 +6,7 @@ class SMSAdapter extends NotificationAdapter {
   constructor() {
     super();
     this.env = config.env;
-    this.useTwilio = this.env === 'production' && config.twilio.accountSid && config.twilio.authToken;
+    this.useTwilio = !!(this.env === 'production' && config.twilio.accountSid && config.twilio.authToken);
 
     if (this.useTwilio) {
       this.client = twilio(config.twilio.accountSid, config.twilio.authToken);
@@ -51,4 +51,6 @@ class SMSAdapter extends NotificationAdapter {
   }
 }
 
-module.exports = new SMSAdapter();
+const smsAdapter = new SMSAdapter();
+smsAdapter.SMSAdapter = SMSAdapter;
+module.exports = smsAdapter;

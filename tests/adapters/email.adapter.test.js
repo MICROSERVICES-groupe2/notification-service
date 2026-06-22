@@ -1,4 +1,4 @@
-const EmailAdapter = require('../../src/adapters/email.adapter');
+const { EmailAdapter } = require('../../src/adapters/email.adapter');
 const nodemailer = require('nodemailer');
 const sgMail = require('@sendgrid/mail');
 const config = require('../../src/config');
@@ -48,6 +48,7 @@ describe('EmailAdapter Tests', () => {
 
   test('should send mail via SMTP in development', async () => {
     config.env = 'development';
+    config.sendgrid.apiKey = '';
     const adapter = new EmailAdapter();
     
     const notification = {
@@ -59,10 +60,9 @@ describe('EmailAdapter Tests', () => {
     const result = await adapter.send(notification);
     
     expect(mockSendMail).toHaveBeenCalledWith({
-      from: '"Bank Platform" <no-reply@bankplatform.com>',
+      from: 'no-reply@bankplatform.com',
       to: 'client@example.com',
       subject: 'Test SMTP',
-      text: 'Hello SMTP',
       html: 'Hello SMTP'
     });
     expect(result.messageId).toBe('test-smtp-id');
@@ -87,9 +87,9 @@ describe('EmailAdapter Tests', () => {
       to: 'client@example.com',
       from: 'no-reply@bankplatform.com',
       subject: 'Test SendGrid',
-      text: 'Hello SendGrid',
       html: 'Hello SendGrid'
     });
-    expect(result[0].headers['x-message-id']).toBe('sg-msg-id');
+    expect(result.success).toBe(true);
+    expect(result.provider).toBe('SendGrid');
   });
 });

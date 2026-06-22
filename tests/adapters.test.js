@@ -1,3 +1,8 @@
+// Force PushAdapter to run in Console Simulation mode for these tests
+process.env.FIREBASE_PROJECT_ID = '';
+process.env.FIREBASE_PRIVATE_KEY = '';
+process.env.FIREBASE_CLIENT_EMAIL = '';
+
 const emailAdapter = require('../src/adapters/email.adapter');
 const smsAdapter = require('../src/adapters/sms.adapter');
 const pushAdapter = require('../src/adapters/push.adapter');

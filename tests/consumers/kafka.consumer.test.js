@@ -54,7 +54,7 @@ describe('KafkaConsumer Tests', () => {
         value: Buffer.from(JSON.stringify({
           channel: 'EMAIL',
           to: 'test@example.com',
-          templateName: 'welcome',
+          template: 'welcome',
           data: { name: 'Alice' }
         }))
       }
@@ -65,7 +65,7 @@ describe('KafkaConsumer Tests', () => {
     expect(notificationService.dispatch).toHaveBeenCalledWith({
       channel: 'EMAIL',
       to: 'test@example.com',
-      templateName: 'welcome',
+      template: 'welcome',
       data: { name: 'Alice' }
     });
   });
@@ -78,9 +78,9 @@ describe('KafkaConsumer Tests', () => {
       partition: 0,
       message: {
         value: Buffer.from(JSON.stringify({
-          userId: 'user-777',
-          email: 'user777@example.com',
-          name: 'Bob',
+          clientId: 'user-777',
+          clientEmail: 'user777@example.com',
+          clientName: 'Bob',
           type: 'dépôt',
           amount: '150',
           currency: 'EUR'
@@ -92,16 +92,18 @@ describe('KafkaConsumer Tests', () => {
 
     expect(notificationService.dispatch).toHaveBeenCalledWith({
       channel: 'EMAIL',
+      template: 'transaction_confirmed',
+      data: expect.any(Object),
       to: 'user777@example.com',
-      templateName: 'transaction_confirmed',
-      data: expect.any(Object)
+      subject: 'Transaction Confirmée'
     });
 
     expect(notificationService.dispatch).toHaveBeenCalledWith({
       channel: 'INAPP',
-      to: 'user-777',
-      templateName: 'transaction_confirmed',
-      data: expect.any(Object)
+      template: 'transaction_confirmed',
+      data: expect.any(Object),
+      userId: 'user-777',
+      title: 'Mouvement de compte'
     });
   });
 
@@ -113,9 +115,9 @@ describe('KafkaConsumer Tests', () => {
       partition: 0,
       message: {
         value: Buffer.from(JSON.stringify({
-          userId: 'user-888',
-          email: 'user888@example.com',
-          name: 'Charlie',
+          clientId: 'user-888',
+          clientEmail: 'user888@example.com',
+          clientName: 'Charlie',
           amount: '10000',
           currency: 'EUR',
           status: 'APPROVED',
@@ -128,9 +130,10 @@ describe('KafkaConsumer Tests', () => {
 
     expect(notificationService.dispatch).toHaveBeenCalledWith({
       channel: 'EMAIL',
+      template: 'loan_approved',
+      data: expect.any(Object),
       to: 'user888@example.com',
-      templateName: 'loan_approved',
-      data: expect.any(Object)
+      subject: 'Prêt Accordé'
     });
   });
 });

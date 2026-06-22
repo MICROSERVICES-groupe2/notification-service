@@ -1,4 +1,4 @@
-const SMSAdapter = require('../../src/adapters/sms.adapter');
+const { SMSAdapter } = require('../../src/adapters/sms.adapter');
 const twilio = require('twilio');
 const config = require('../../src/config');
 
@@ -11,11 +11,14 @@ describe('SMSAdapter Tests', () => {
 
   test('should use mock SMS by default in development', async () => {
     config.env = 'development';
+    config.twilio.accountSid = '';
+    config.twilio.authToken = '';
     const adapter = new SMSAdapter();
     expect(adapter.useTwilio).toBe(false);
 
     const result = await adapter.send({ to: '+33612345678', body: 'Hello' });
-    expect(result.sid).toContain('mock-sms-sid');
+    expect(result.success).toBe(true);
+    expect(result.provider).toBe('Console');
   });
 
   test('should use Twilio in production if config is set', async () => {

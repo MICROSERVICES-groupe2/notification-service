@@ -7,7 +7,7 @@ class EmailAdapter extends NotificationAdapter {
   constructor() {
     super();
     this.env = config.env;
-    this.useSendGrid = this.env === 'production' && config.sendgrid.apiKey;
+    this.useSendGrid = !!(this.env === 'production' && config.sendgrid.apiKey);
 
     if (this.useSendGrid) {
       sgMail.setApiKey(config.sendgrid.apiKey);
@@ -69,4 +69,6 @@ class EmailAdapter extends NotificationAdapter {
   }
 }
 
-module.exports = new EmailAdapter();
+const emailAdapter = new EmailAdapter();
+emailAdapter.EmailAdapter = EmailAdapter;
+module.exports = emailAdapter;

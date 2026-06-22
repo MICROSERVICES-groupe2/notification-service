@@ -79,4 +79,6 @@ class PushAdapter extends NotificationAdapter {
   }
 }
 
-module.exports = new PushAdapter();
+const pushAdapter = new PushAdapter();
+pushAdapter.PushAdapter = PushAdapter;
+module.exports = pushAdapter;
